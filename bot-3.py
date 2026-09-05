@@ -3,9 +3,9 @@ Telegram Admin-Relay Bot — everything in this one file.
 
 SETUP
 1. Install dependency:
-   pip install "python-telegram-bot[job-queue]"==21.4
+   pip install "python-telegram-bot[job-queue]"==21.9
 2. Run:
-   python bot.py
+   python bot-3.py
    (BOT_TOKEN and OWNER_ID are already filled in below)
 
 HOW ADMINS WORK
