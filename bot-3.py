@@ -35,6 +35,9 @@ OWNER + ADMIN COMMANDS
 HOSTING 24/7
 Push this file to GitHub and deploy on Railway or Render as a
 worker/background service.
+IMPORTANT: only run ONE deployment of this bot at a time. Running two
+copies with the same BOT_TOKEN causes Telegram to randomly drop updates
+between them, making commands behave inconsistently.
 """
 
 import json
@@ -61,8 +64,6 @@ OWNER_ID = 6731551933  # your Telegram numeric user id — fixed, can't be remov
 
 DATA_FILE = "bot_data.json"
 
-# In-memory: tracks what the owner is being asked for right now
-# (e.g. "set_admin", "remove_admin", "set_welcome"). Not persisted — resets on restart.
 pending_actions = {}
 
 
@@ -73,15 +74,15 @@ def load_data():
     return {
         "users": [],
         "banned": [],
-        "admins": [],           # extra admins (list of user ids), owner not included
-        "usernames": {},        # "username" (lowercase, no @) -> user_id
-        "message_map": {},      # "chat_id:message_id" -> original user id
+        "admins": [],
+        "usernames": {},
+        "message_map": {},
         "broadcast_enabled": False,
         "broadcast_text": "",
         "broadcast_hour": 9,
         "broadcast_minute": 0,
         "welcome_message": "Hi! Send me a message and it'll reach the admin.",
-        "welcome_photo": None,   # file_id of the welcome image, if any
+        "welcome_photo": None,
     }
 
 
@@ -109,7 +110,6 @@ def remember_username(user):
 
 
 def resolve_user_id(arg):
-    """arg can be an int-like string or '@username'."""
     if arg.startswith("@"):
         username = arg.lstrip("@").lower()
         return data["usernames"].get(username)
@@ -145,7 +145,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def relay_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    # Admins talking to the bot outside of a reply shouldn't be relayed as "users"
     if is_admin(user.id):
         return
 
@@ -157,11 +156,6 @@ async def relay_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["users"].append(user.id)
     save_data(data)
 
-    info = f"From: {user.full_name} (id: {user.id})"
-    keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("Ban this user", callback_data=f"ban_{user.id}")]]
-    )
-
     for admin_id in admin_chat_ids():
         try:
             forwarded = await context.bot.forward_message(
@@ -170,21 +164,19 @@ async def relay_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_id=update.message.message_id,
             )
             data["message_map"][f"{admin_id}:{forwarded.message_id}"] = user.id
-            await context.bot.send_message(chat_id=admin_id, text=info, reply_markup=keyboard)
         except Exception as e:
             logger.warning(f"Failed to relay to admin {admin_id}: {e}")
 
     save_data(data)
 
 
-# ---- Owner text/photo input for pending panel actions (owner-only) ----
 async def owner_pending_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id != OWNER_ID:
         return
     action = pending_actions.get(user.id)
     if not action:
-        return  # nothing pending, let other handlers process normally
+        return
 
     if action == "set_welcome":
         pending_actions.pop(user.id, None)
@@ -257,20 +249,6 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Failed: {e}")
 
 
-# ---- Ban / Unban — available to owner AND regular admins ----
-async def ban_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if not is_admin(query.from_user.id):
-        await query.answer("Only admins can ban.", show_alert=True)
-        return
-    await query.answer()
-    user_id = int(query.data.split("_")[1])
-    if user_id not in data["banned"]:
-        data["banned"].append(user_id)
-        save_data(data)
-    await query.edit_message_text(f"User {user_id} banned.")
-
-
 async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -327,7 +305,6 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Unbanned {uid}")
 
 
-# ---- Admin management — owner only ----
 async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
@@ -453,7 +430,6 @@ async def send_daily_broadcast(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Failed to send to {uid}: {e}")
 
 
-# ---- Admin panel (buttons) — owner only ----
 def panel_keyboard():
     return InlineKeyboardMarkup(
         [
@@ -509,10 +485,8 @@ def main():
     app.add_handler(CommandHandler("broadcaston", broadcast_on))
     app.add_handler(CommandHandler("broadcastoff", broadcast_off))
 
-    app.add_handler(CallbackQueryHandler(ban_callback, pattern=r"^ban_"))
     app.add_handler(CallbackQueryHandler(panel_callback, pattern=r"^panel_"))
 
-    # Owner's pending panel input (text or photo) — checked before other handlers
     app.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & (filters.TEXT | filters.PHOTO) & ~filters.COMMAND & filters.User(user_id=OWNER_ID),
@@ -521,12 +495,10 @@ def main():
         group=-1,
     )
 
-    # Any admin (owner or added) replying to a forwarded message -> routes back to that user
     app.add_handler(
         MessageHandler(filters.REPLY & filters.TEXT & filters.ChatType.PRIVATE, admin_reply)
     )
 
-    # Any normal (non-admin) user message -> relay to all admins
     app.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & ~filters.COMMAND,
