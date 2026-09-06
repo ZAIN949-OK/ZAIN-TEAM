@@ -24,9 +24,7 @@ PANEL
 HOSTING 24/7
 Push this file to GitHub and deploy on Railway or Render as a
 worker/background service.
-IMPORTANT: only run ONE deployment of this bot at a time. Running two
-copies with the same BOT_TOKEN causes Telegram to randomly drop updates
-between them, making commands behave inconsistently.
+IMPORTANT: only run ONE deployment of this bot at a time.
 """
 
 import json
@@ -46,15 +44,13 @@ from telegram.ext import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---- CONFIG ----
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 OWNER_ID = 6731551933
 
 DATA_FILE = "bot_data.json"
 
-# In-memory state (resets on restart)
-pending_actions = {}     # owner_id -> action string, e.g. "set_admin"
-onetime_draft = {}       # owner_id -> drafted one-time broadcast text awaiting confirm
+pending_actions = {}
+onetime_draft = {}
 
 
 def load_data():
@@ -88,7 +84,7 @@ data.setdefault("broadcast_hour", 9)
 data.setdefault("broadcast_minute", 0)
 
 
-def is_admin(user_id: int) -> bool:
+def is_admin(user_id):
     return user_id == OWNER_ID or user_id in data["admins"]
 
 
@@ -118,27 +114,26 @@ def username_for(uid):
     return None
 
 
-# ---- Keyboards ----
 def main_panel_keyboard():
     return ReplyKeyboardMarkup(
         [
-            ["👑 Set Admin", "🚫 Remove Admin", "📋 List Admins"],
-            ["🎉 Welcome Msg"],
-            ["📅 Daily Broadcast", "🕐 One-Time Broadcast"],
-            ["❌ Close Panel"],
+            ["Set Admin", "Remove Admin", "List Admins"],
+            ["Welcome Msg"],
+            ["Daily Broadcast", "One-Time Broadcast"],
+            ["Close Panel"],
         ],
         resize_keyboard=True,
     )
 
 
 def daily_broadcast_keyboard():
-    status = "ON 🟢" if data.get("broadcast_enabled") else "OFF 🔴"
+    status = "ON" if data.get("broadcast_enabled") else "OFF"
     time_str = f"{data.get('broadcast_hour', 9):02d}:{data.get('broadcast_minute', 0):02d}"
     return ReplyKeyboardMarkup(
         [
-            ["📝 Set Message", f"⏰ Set Time ({time_str})"],
-            [f"📡 Toggle ({status})"],
-            ["🔙 Back to Panel"],
+            ["Set Message", f"Set Time ({time_str})"],
+            [f"Toggle ({status})"],
+            ["Back to Panel"],
         ],
         resize_keyboard=True,
     )
@@ -147,8 +142,8 @@ def daily_broadcast_keyboard():
 def onetime_broadcast_keyboard():
     return ReplyKeyboardMarkup(
         [
-            ["📝 Compose Message"],
-            ["🔙 Back to Panel"],
+            ["Compose Message"],
+            ["Back to Panel"],
         ],
         resize_keyboard=True,
     )
@@ -156,40 +151,33 @@ def onetime_broadcast_keyboard():
 
 def confirm_cancel_keyboard():
     return ReplyKeyboardMarkup(
-        [["✅ Send Now", "❌ Cancel"]],
+        [["Send Now", "Cancel"]],
         resize_keyboard=True,
     )
 
 
-# ---- Basic user-facing handlers ----
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update, context):
     user = update.effective_user
     remember_username(user)
     if user.id not in data["users"]:
         data["users"].append(user.id)
     save_data(data)
-
     if data.get("welcome_photo"):
-        await update.message.reply_photo(
-            photo=data["welcome_photo"],
-            caption=data.get("welcome_message", ""),
-        )
+        await update.message.reply_photo(photo=data["welcome_photo"], caption=data.get("welcome_message", ""))
     else:
         await update.message.reply_text(data.get("welcome_message", "Hi!"))
 
 
-async def relay_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def relay_to_admin(update, context):
     user = update.effective_user
     if is_admin(user.id):
         return
     if user.id in data["banned"]:
         return
-
     remember_username(user)
     if user.id not in data["users"]:
         data["users"].append(user.id)
     save_data(data)
-
     for admin_id in admin_chat_ids():
         try:
             forwarded = await context.bot.forward_message(
@@ -200,23 +188,20 @@ async def relay_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data["message_map"][f"{admin_id}:{forwarded.message_id}"] = user.id
         except Exception as e:
             logger.warning(f"Failed to relay to admin {admin_id}: {e}")
-
     save_data(data)
 
 
-async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_reply(update, context):
     sender_id = update.effective_user.id
     if not is_admin(sender_id):
         return
     if not update.message.reply_to_message:
         return
-
     key = f"{sender_id}:{update.message.reply_to_message.message_id}"
     target_user_id = data["message_map"].get(key)
     if target_user_id is None:
         await update.message.reply_text("Can't find the original user for this message.")
         return
-
     try:
         await context.bot.send_message(chat_id=target_user_id, text=update.message.text)
         await update.message.reply_text("Sent.")
@@ -224,8 +209,7 @@ async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Failed: {e}")
 
 
-# ---- Ban / Unban (owner + admins) ----
-async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ban_command(update, context):
     if not is_admin(update.effective_user.id):
         return
     uid = None
@@ -238,21 +222,18 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif context.args:
         uid = resolve_user_id(context.args[0])
         if uid is None:
-            await update.message.reply_text(
-                "Couldn't resolve that user. Use /ban <user_id>, /ban @username, or reply to their message."
-            )
+            await update.message.reply_text("Couldn't resolve that user.")
             return
     else:
         await update.message.reply_text("Usage: /ban <user_id> or /ban @username, or reply to their message")
         return
-
     if uid not in data["banned"]:
         data["banned"].append(uid)
         save_data(data)
     await update.message.reply_text(f"Banned {uid}")
 
 
-async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def unban_command(update, context):
     if not is_admin(update.effective_user.id):
         return
     uid = None
@@ -265,22 +246,18 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif context.args:
         uid = resolve_user_id(context.args[0])
         if uid is None:
-            await update.message.reply_text(
-                "Couldn't resolve that user. Use /unban <user_id>, /unban @username, or reply to their message."
-            )
+            await update.message.reply_text("Couldn't resolve that user.")
             return
     else:
         await update.message.reply_text("Usage: /unban <user_id> or /unban @username, or reply to their message")
         return
-
     if uid in data["banned"]:
         data["banned"].remove(uid)
         save_data(data)
     await update.message.reply_text(f"Unbanned {uid}")
 
 
-# ---- Admin management commands (owner only, kept for convenience) ----
-async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def add_admin_command(update, context):
     if update.effective_user.id != OWNER_ID:
         return
     uid = None
@@ -296,29 +273,26 @@ async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         username = context.args[0].lstrip("@").lower()
         uid = data["usernames"].get(username)
         if uid is None:
-            await update.message.reply_text(
-                "Don't know that user's id yet — they must message the bot at least once first."
-            )
+            await update.message.reply_text("Don't know that user's id yet.")
             return
     else:
         await update.message.reply_text("Usage: /addadmin @username, or reply to their message")
         return
-
     if uid == OWNER_ID:
-        await update.message.reply_text("That's you — you're already the owner.")
+        await update.message.reply_text("That's you.")
         return
     if uid not in data["admins"]:
         data["admins"].append(uid)
         save_data(data)
     label = f"@{username}" if username else str(uid)
-    await update.message.reply_text(f"{label} (id: {uid}) is now an admin.")
+    await update.message.reply_text(f"{label} is now an admin.")
     try:
         await context.bot.send_message(chat_id=uid, text="You've been made an admin of this bot.")
     except Exception:
         pass
 
 
-async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def remove_admin_command(update, context):
     if update.effective_user.id != OWNER_ID:
         return
     uid = None
@@ -339,7 +313,6 @@ async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await update.message.reply_text("Usage: /removeadmin @username, or reply to their message")
         return
-
     if uid not in data["admins"]:
         await update.message.reply_text("That user isn't an admin.")
         return
@@ -349,18 +322,17 @@ async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text(f"{label} removed from admins.")
 
 
-async def list_admins_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def list_admins_command(update, context):
     if update.effective_user.id != OWNER_ID:
         return
     if not data["admins"]:
-        await update.message.reply_text("No extra admins yet. You (owner) are the only admin.")
+        await update.message.reply_text("No extra admins yet.")
         return
     lines = [str(uid) for uid in data["admins"]]
     await update.message.reply_text("Extra admins:\n" + "\n".join(lines))
 
 
-# ---- Broadcast scheduling ----
-async def send_daily_broadcast(context: ContextTypes.DEFAULT_TYPE):
+async def send_daily_broadcast(context):
     if not data.get("broadcast_enabled") or not data.get("broadcast_text"):
         return
     for uid in list(data["users"]):
@@ -369,7 +341,7 @@ async def send_daily_broadcast(context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(chat_id=uid, text=data["broadcast_text"])
         except Exception as e:
-            logger.warning(f"Failed to send daily broadcast to {uid}: {e}")
+            logger.warning(f"Failed daily broadcast to {uid}: {e}")
 
 
 def schedule_daily_job(job_queue):
@@ -382,7 +354,7 @@ def schedule_daily_job(job_queue):
     )
 
 
-async def send_onetime_broadcast(context: ContextTypes.DEFAULT_TYPE, text: str):
+async def send_onetime_broadcast(context, text):
     sent, failed = 0, 0
     for uid in list(data["users"]):
         if uid in data["banned"]:
@@ -390,61 +362,51 @@ async def send_onetime_broadcast(context: ContextTypes.DEFAULT_TYPE, text: str):
         try:
             await context.bot.send_message(chat_id=uid, text=text)
             sent += 1
-        except Exception as e:
-            logger.warning(f"Failed to send one-time broadcast to {uid}: {e}")
+        except Exception:
             failed += 1
     return sent, failed
 
 
-# ---- Panel entry point ----
-async def panel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def panel_command(update, context):
     if update.effective_user.id != OWNER_ID:
         return
     pending_actions.pop(OWNER_ID, None)
     onetime_draft.pop(OWNER_ID, None)
-    await update.message.reply_text(
-        "🎛️ Admin Control Panel — tap a button below:",
-        reply_markup=main_panel_keyboard(),
-    )
+    await update.message.reply_text("Admin Control Panel:", reply_markup=main_panel_keyboard())
 
 
-# ---- Panel router: handles all button presses + pending text/photo input ----
-async def owner_panel_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def owner_panel_router(update, context):
     user = update.effective_user
     if user.id != OWNER_ID:
         return
 
     text = update.message.text.strip() if update.message.text else None
 
-    # --- Navigation & top-level buttons ---
-    if text == "❌ Close Panel":
+    if text == "Close Panel":
         pending_actions.pop(user.id, None)
         onetime_draft.pop(user.id, None)
         await update.message.reply_text("Panel closed.", reply_markup=ReplyKeyboardRemove())
         return
 
-    if text == "🔙 Back to Panel":
+    if text == "Back to Panel":
         pending_actions.pop(user.id, None)
         onetime_draft.pop(user.id, None)
         await update.message.reply_text("Main Panel:", reply_markup=main_panel_keyboard())
         return
 
-    if text == "👑 Set Admin":
+    if text == "Set Admin":
         pending_actions[user.id] = "set_admin"
-        await update.message.reply_text(
-            "Send the @username of the user you want to make admin.\n"
-            "(They must have messaged the bot at least once.)"
-        )
+        await update.message.reply_text("Send the @username of the user you want to make admin.")
         return
 
-    if text == "🚫 Remove Admin":
+    if text == "Remove Admin":
         pending_actions[user.id] = "remove_admin"
         await update.message.reply_text("Send the @username of the admin you want to remove.")
         return
 
-    if text == "📋 List Admins":
+    if text == "List Admins":
         if not data["admins"]:
-            reply = "No extra admins yet. You (owner) are the only admin."
+            reply = "No extra admins yet."
         else:
             lines = []
             for uid in data["admins"]:
@@ -454,76 +416,64 @@ async def owner_panel_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(reply, reply_markup=main_panel_keyboard())
         return
 
-    if text == "🎉 Welcome Msg":
+    if text == "Welcome Msg":
         pending_actions[user.id] = "set_welcome"
-        await update.message.reply_text(
-            "Send the new welcome message:\n"
-            "• Send plain text for a text-only welcome, OR\n"
-            "• Send a photo with a caption for an image welcome."
-        )
+        await update.message.reply_text("Send new welcome text, or a photo with a caption.")
         return
 
-    # --- Daily Broadcast submenu ---
-    if text == "📅 Daily Broadcast":
+    if text == "Daily Broadcast":
         pending_actions.pop(user.id, None)
         await update.message.reply_text("Daily Broadcast Menu:", reply_markup=daily_broadcast_keyboard())
         return
 
-    if text == "📝 Set Message":
+    if text == "Set Message":
         pending_actions[user.id] = "set_daily_text"
         await update.message.reply_text("Send the message to broadcast daily.")
         return
 
-    if text and text.startswith("⏰ Set Time"):
+    if text and text.startswith("Set Time"):
         pending_actions[user.id] = "set_daily_time"
-        await update.message.reply_text("Send the time in 24-hour HH:MM format (e.g. 09:00 or 21:30).")
+        await update.message.reply_text("Send time as HH:MM (e.g. 09:00).")
         return
 
-    if text and text.startswith("📡 Toggle"):
+    if text and text.startswith("Toggle"):
         data["broadcast_enabled"] = not data.get("broadcast_enabled", False)
         save_data(data)
         schedule_daily_job(context.job_queue)
-        status = "ON 🟢" if data["broadcast_enabled"] else "OFF 🔴"
-        await update.message.reply_text(
-            f"Daily broadcast turned {status}.", reply_markup=daily_broadcast_keyboard()
-        )
+        status = "ON" if data["broadcast_enabled"] else "OFF"
+        await update.message.reply_text(f"Daily broadcast turned {status}.", reply_markup=daily_broadcast_keyboard())
         return
 
-    # --- One-Time Broadcast submenu ---
-    if text == "🕐 One-Time Broadcast":
+    if text == "One-Time Broadcast":
         pending_actions.pop(user.id, None)
         onetime_draft.pop(user.id, None)
         await update.message.reply_text("One-Time Broadcast Menu:", reply_markup=onetime_broadcast_keyboard())
         return
 
-    if text == "📝 Compose Message":
+    if text == "Compose Message":
         pending_actions[user.id] = "set_onetime_text"
         await update.message.reply_text("Send the message you want to broadcast once.")
         return
 
-    if text == "✅ Send Now":
+    if text == "Send Now":
         draft = onetime_draft.pop(user.id, None)
         if not draft:
             await update.message.reply_text("Nothing to send.", reply_markup=onetime_broadcast_keyboard())
             return
         await update.message.reply_text("Sending...", reply_markup=onetime_broadcast_keyboard())
         sent, failed = await send_onetime_broadcast(context, draft)
-        await update.message.reply_text(
-            f"One-time broadcast sent. ✅ Delivered: {sent}  ❌ Failed: {failed}",
-            reply_markup=main_panel_keyboard(),
-        )
+        await update.message.reply_text(f"Sent. Delivered: {sent} Failed: {failed}", reply_markup=main_panel_keyboard())
         return
 
-    if text == "❌ Cancel":
+    if text == "Cancel":
         onetime_draft.pop(user.id, None)
         pending_actions.pop(user.id, None)
-        await update.message.reply_text("One-time broadcast cancelled.", reply_markup=onetime_broadcast_keyboard())
+        await update.message.reply_text("Cancelled.", reply_markup=onetime_broadcast_keyboard())
         return
 
-    # --- Handle whatever pending action is waiting for input ---
     action = pending_actions.get(user.id)
     if not action:
-        return  # not part of any panel flow, let other handlers process
+        return
 
     if action == "set_welcome":
         pending_actions.pop(user.id, None)
@@ -531,12 +481,12 @@ async def owner_panel_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
             data["welcome_photo"] = update.message.photo[-1].file_id
             data["welcome_message"] = update.message.caption or ""
             save_data(data)
-            await update.message.reply_text("Welcome message updated (with image).", reply_markup=main_panel_keyboard())
+            await update.message.reply_text("Welcome updated with image.", reply_markup=main_panel_keyboard())
         elif update.message.text:
             data["welcome_photo"] = None
             data["welcome_message"] = update.message.text.strip()
             save_data(data)
-            await update.message.reply_text("Welcome message updated (text only).", reply_markup=main_panel_keyboard())
+            await update.message.reply_text("Welcome updated.", reply_markup=main_panel_keyboard())
         return
 
     if not update.message.text:
@@ -548,18 +498,15 @@ async def owner_panel_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
         username = typed.lstrip("@").lower()
         uid = data["usernames"].get(username)
         if uid is None:
-            await update.message.reply_text(
-                "Don't know that user's id yet — they must message the bot at least once first.",
-                reply_markup=main_panel_keyboard(),
-            )
+            await update.message.reply_text("Unknown user.", reply_markup=main_panel_keyboard())
             return
         if uid == OWNER_ID:
-            await update.message.reply_text("That's you — you're already the owner.", reply_markup=main_panel_keyboard())
+            await update.message.reply_text("That's you.", reply_markup=main_panel_keyboard())
             return
         if uid not in data["admins"]:
             data["admins"].append(uid)
             save_data(data)
-        await update.message.reply_text(f"@{username} (id: {uid}) is now an admin.", reply_markup=main_panel_keyboard())
+        await update.message.reply_text(f"@{username} is now an admin.", reply_markup=main_panel_keyboard())
         try:
             await context.bot.send_message(chat_id=uid, text="You've been made an admin of this bot.")
         except Exception:
@@ -571,12 +518,12 @@ async def owner_panel_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
         username = typed.lstrip("@").lower()
         uid = data["usernames"].get(username)
         if uid is None or uid not in data["admins"]:
-            await update.message.reply_text("That user isn't an admin.", 
-reply_markup=main_panel_keyboard())
+            await update.message.reply_text("Not an admin.", reply_markup=main_panel_keyboard())
+            return
+        data["admins"].remove(uid)
+        save_data(data)
+        await update.message.reply_text(f"@{username} removed.", reply_markup=main_panel_keyboard())
         return
-    data["admins"].remove(uid)
-    save_data(data)
-    await update.message.reply_text(f"@{username} removed from admins.", reply_markup=main_panel_keyboard())
 
     if action == "set_daily_text":
         pending_actions.pop(user.id, None)
@@ -592,25 +539,20 @@ reply_markup=main_panel_keyboard())
             if not (0 <= hour <= 23 and 0 <= minute <= 59):
                 raise ValueError
         except ValueError:
-            await update.message.reply_text("Invalid format. Send time as HH:MM, e.g. 09:00 or 21:30.")
+            await update.message.reply_text("Invalid format. Use HH:MM.")
             return
         pending_actions.pop(user.id, None)
         data["broadcast_hour"] = hour
         data["broadcast_minute"] = minute
         save_data(data)
         schedule_daily_job(context.job_queue)
-        await update.message.reply_text(
-            f"Daily broadcast time set to {hour:02d}:{minute:02d}.", reply_markup=daily_broadcast_keyboard()
-        )
+        await update.message.reply_text(f"Time set to {hour:02d}:{minute:02d}.", reply_markup=daily_broadcast_keyboard())
         return
 
     if action == "set_onetime_text":
         pending_actions.pop(user.id, None)
         onetime_draft[user.id] = typed
-        await update.message.reply_text(
-            f"Preview:\n\n{typed}\n\nSend this now?",
-            reply_markup=confirm_cancel_keyboard(),
-        )
+        await update.message.reply_text(f"Preview:\n\n{typed}\n\nSend this now?", reply_markup=confirm_cancel_keyboard())
         return
 
 
@@ -633,16 +575,9 @@ def main():
         group=-1,
     )
 
-    app.add_handler(
-        MessageHandler(filters.REPLY & filters.TEXT & filters.ChatType.PRIVATE, admin_reply)
-    )
+    app.add_handler(MessageHandler(filters.REPLY & filters.TEXT & filters.ChatType.PRIVATE, admin_reply))
 
-    app.add_handler(
-        MessageHandler(
-            filters.ChatType.PRIVATE & ~filters.COMMAND,
-            relay_to_admin,
-        )
-    )
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, relay_to_admin))
 
     schedule_daily_job(app.job_queue)
 
