@@ -572,3 +572,82 @@ async def owner_panel_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
         uid = data["usernames"].get(username)
         if uid is None or uid not in data["admins"]:
             await update.message.reply_text("That user isn't an admin.", 
+reply_markup=main_panel_keyboard())
+        return
+    data["admins"].remove(uid)
+    save_data(data)
+    await update.message.reply_text(f"@{username} removed from admins.", reply_markup=main_panel_keyboard())
+
+    if action == "set_daily_text":
+        pending_actions.pop(user.id, None)
+        data["broadcast_text"] = typed
+        save_data(data)
+        await update.message.reply_text("Daily broadcast message saved.", reply_markup=daily_broadcast_keyboard())
+        return
+
+    if action == "set_daily_time":
+        try:
+            hour_str, minute_str = typed.split(":")
+            hour, minute = int(hour_str), int(minute_str)
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text("Invalid format. Send time as HH:MM, e.g. 09:00 or 21:30.")
+            return
+        pending_actions.pop(user.id, None)
+        data["broadcast_hour"] = hour
+        data["broadcast_minute"] = minute
+        save_data(data)
+        schedule_daily_job(context.job_queue)
+        await update.message.reply_text(
+            f"Daily broadcast time set to {hour:02d}:{minute:02d}.", reply_markup=daily_broadcast_keyboard()
+        )
+        return
+
+    if action == "set_onetime_text":
+        pending_actions.pop(user.id, None)
+        onetime_draft[user.id] = typed
+        await update.message.reply_text(
+            f"Preview:\n\n{typed}\n\nSend this now?",
+            reply_markup=confirm_cancel_keyboard(),
+        )
+        return
+
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("panel", panel_command))
+    app.add_handler(CommandHandler("ban", ban_command))
+    app.add_handler(CommandHandler("unban", unban_command))
+    app.add_handler(CommandHandler("addadmin", add_admin_command))
+    app.add_handler(CommandHandler("removeadmin", remove_admin_command))
+    app.add_handler(CommandHandler("listadmins", list_admins_command))
+
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & (filters.TEXT | filters.PHOTO) & ~filters.COMMAND & filters.User(user_id=OWNER_ID),
+            owner_panel_router,
+        ),
+        group=-1,
+    )
+
+    app.add_handler(
+        MessageHandler(filters.REPLY & filters.TEXT & filters.ChatType.PRIVATE, admin_reply)
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & ~filters.COMMAND,
+            relay_to_admin,
+        )
+    )
+
+    schedule_daily_job(app.job_queue)
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
